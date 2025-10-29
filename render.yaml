@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: datascrape-pro
+    runtime: docker
+    plan: free
+    env: python
+    envVars:
+      - key: DEBUG
+        value: False
+    healthCheckPath: /
