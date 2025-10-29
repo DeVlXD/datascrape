@@ -675,14 +675,27 @@ class GoogleMapsScraper:
     def setup_driver(self):
         chrome_options = Options()
         if self.headless:
-            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')  # Use new headless mode
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_argument('--start-maximized')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--disable-software-rasterizer')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--dns-prefetch-disable')
+        chrome_options.add_argument('--disable-web-security')
+        chrome_options.add_argument('--lang=en-US,en')
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
-        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36')
+
+        # Additional preferences to appear more like a real browser
+        chrome_options.add_experimental_option("prefs", {
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.default_content_settings.popups": 0,
+        })
 
         try:
             from selenium.webdriver.chrome.service import Service
@@ -709,55 +722,87 @@ class GoogleMapsScraper:
             self.driver = webdriver.Chrome(options=chrome_options)
 
         print("Chrome driver initialized successfully")
+
+        # Enhanced anti-detection scripts
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+            "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
+        })
+        self.driver.execute_script("""
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+        """)
         
     def scrape_businesses(self, location, keyword, max_results=10):
         if not self.driver:
             self.setup_driver()
-        
+
         print(f"Searching for: {keyword} in {location}")
-        
+
         # Go to Google Maps
+        print("Loading Google Maps...")
         self.driver.get("https://www.google.com/maps")
-        time.sleep(3)
-        
+        time.sleep(5)  # Increased wait time
+        print(f"Current URL after loading: {self.driver.current_url}")
+        print(f"Page title: {self.driver.title}")
+
         # Find and use the search box
         try:
-            search_box = WebDriverWait(self.driver, 10).until(
+            print("Looking for search box...")
+            search_box = WebDriverWait(self.driver, 20).until(  # Increased timeout
                 EC.presence_of_element_located((By.ID, "searchboxinput"))
             )
+            print("Search box found!")
             search_query = f"{keyword} in {location}"
+            time.sleep(1)  # Small delay before typing
             search_box.send_keys(search_query)
+            time.sleep(1)  # Small delay before pressing enter
             search_box.send_keys(Keys.RETURN)
-            print("Search submitted")
-            time.sleep(5)
+            print("Search submitted, waiting for results...")
+            time.sleep(7)  # Increased wait time for results to load
+            print(f"URL after search: {self.driver.current_url}")
         except Exception as e:
-            print(f"Error with search: {e}")
+            print(f"ERROR: Could not find or use search box: {e}")
+            print(f"Page source length: {len(self.driver.page_source)}")
+            # Save screenshot for debugging
+            try:
+                screenshot_path = f"downloads/debug_search_error_{int(time.time())}.png"
+                self.driver.save_screenshot(screenshot_path)
+                print(f"Screenshot saved to {screenshot_path}")
+            except:
+                pass
             return []
-        
+
         results = []
-        
+
         try:
             # Wait for results to load
-            WebDriverWait(self.driver, 15).until(
+            print("Waiting for results feed to load...")
+            WebDriverWait(self.driver, 25).until(  # Increased timeout to 25 seconds
                 EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='feed']"))
             )
-            
+            print("Results feed found!")
+
             # Scroll to load more results
             scrollable_div = self.driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
-            
+
             scroll_count = 0
             max_scrolls = 10
-            
+
+            print(f"Starting to scroll (max {max_scrolls} scrolls)...")
             while scroll_count < max_scrolls and len(results) < max_results:
                 # Scroll down
                 self.driver.execute_script(
-                    'arguments[0].scrollTop = arguments[0].scrollHeight', 
+                    'arguments[0].scrollTop = arguments[0].scrollHeight',
                     scrollable_div
                 )
                 time.sleep(2)
                 scroll_count += 1
-                
+
                 # Check if we've reached the end
                 try:
                     end_message = self.driver.find_element(By.CSS_SELECTOR, "p.fontBodyMedium")
@@ -766,12 +811,17 @@ class GoogleMapsScraper:
                         break
                 except:
                     pass
-            
+
+            print(f"Completed {scroll_count} scrolls")
+
             # Get all business links
+            print("Collecting business links...")
             links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/maps/place/']")
+            print(f"Found {len(links)} total links with '/maps/place/'")
+
             unique_links = []
             seen = set()
-            
+
             for link in links:
                 href = link.get_attribute('href')
                 if href and href not in seen and '/maps/place/' in href:
@@ -779,30 +829,60 @@ class GoogleMapsScraper:
                     seen.add(href)
                     if len(unique_links) >= max_results:
                         break
-            
-            print(f"Found {len(unique_links)} unique businesses")
+
+            print(f"Found {len(unique_links)} unique businesses to scrape")
             
             # Visit each business page
+            if len(unique_links) == 0:
+                print("WARNING: No business links found!")
+                # Save screenshot for debugging
+                try:
+                    screenshot_path = f"downloads/debug_no_links_{int(time.time())}.png"
+                    self.driver.save_screenshot(screenshot_path)
+                    print(f"Screenshot saved to {screenshot_path}")
+                except:
+                    pass
+
             for idx, url in enumerate(unique_links[:max_results]):
                 try:
                     print(f"Scraping business {idx + 1}/{len(unique_links)}")
                     self.driver.get(url)
                     time.sleep(3)
-                    
+
                     business_data = self.extract_business_info()
                     if business_data and business_data.get('Name'):
                         results.append(business_data)
                         print(f"  ✓ {business_data['Name']}")
-                    
+                    else:
+                        print(f"  ✗ No data extracted for business {idx + 1}")
+
                 except Exception as e:
                     print(f"  ✗ Error processing business {idx + 1}: {str(e)}")
                     continue
-                    
+
         except TimeoutException:
-            print("Timeout waiting for results")
+            print("ERROR: Timeout waiting for results feed to load")
+            print(f"Current URL: {self.driver.current_url}")
+            # Save screenshot for debugging
+            try:
+                screenshot_path = f"downloads/debug_timeout_{int(time.time())}.png"
+                self.driver.save_screenshot(screenshot_path)
+                print(f"Screenshot saved to {screenshot_path}")
+            except:
+                pass
         except Exception as e:
-            print(f"Error during scraping: {str(e)}")
-        
+            print(f"ERROR during scraping: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Save screenshot for debugging
+            try:
+                screenshot_path = f"downloads/debug_error_{int(time.time())}.png"
+                self.driver.save_screenshot(screenshot_path)
+                print(f"Screenshot saved to {screenshot_path}")
+            except:
+                pass
+
+        print(f"Total results scraped: {len(results)}")
         return results
     
     def extract_email_from_website(self, website_url):
