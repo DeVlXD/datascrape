@@ -683,15 +683,32 @@ class GoogleMapsScraper:
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
+
         try:
-            from webdriver_manager.chrome import ChromeDriverManager
             from selenium.webdriver.chrome.service import Service
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        except:
+            import os
+
+            # Add Chrome binary location for production (Linux)
+            if os.path.exists('/usr/bin/google-chrome'):
+                chrome_options.binary_location = '/usr/bin/google-chrome'
+
+            # Check if we're in production (ChromeDriver in /usr/local/bin)
+            if os.path.exists('/usr/local/bin/chromedriver'):
+                print("Using production ChromeDriver from /usr/local/bin/chromedriver")
+                service = Service('/usr/local/bin/chromedriver')
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                # Local development - use webdriver-manager
+                print("Using webdriver-manager for local development")
+                from webdriver_manager.chrome import ChromeDriverManager
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        except Exception as e:
+            print(f"Error setting up driver: {e}")
+            # Final fallback
             self.driver = webdriver.Chrome(options=chrome_options)
-        
+
+        print("Chrome driver initialized successfully")
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
     def scrape_businesses(self, location, keyword, max_results=10):
